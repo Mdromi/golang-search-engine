@@ -1,0 +1,6 @@
+maxDepth: 5
+concurrency: 10
+boltDBPath: "index.db"
+redisAddress: "localhost:6379"
+filterDomain: "https://voskan.host/category/golang/"
+exampleQueryLink: "https://voskan.host/2023/08/04/building-search-engine-in-golang/"
