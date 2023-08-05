@@ -24,7 +24,7 @@ func TestEndToEndSearchEngine(t *testing.T) {
 	// Send a search query to the search engine using HTTP request (assuming the search endpoint is "/search")
 	// You may need to update the URL to match your actual search endpoint.
 	// resp, err := http.Get("http://localhost:8080/search?query=test")
-	resp, err := http.Get("https://voskan.host/category/golang/")
+	resp, err := http.Get("https://www.webscraper.io/test-sites/tables")
 	assert.NoError(t, err)
 	defer resp.Body.Close()
 

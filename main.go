@@ -1,23 +1,25 @@
-// main.go
-
 package main
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-
 	"io/ioutil"
 
 	"github.com/Mdromi/golang-search-engine/search-engine/crawler"
 	"github.com/Mdromi/golang-search-engine/search-engine/indexer"
 	"github.com/Mdromi/golang-search-engine/search-engine/search"
-	"github.com/go-redis/redis/v8"
+
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
+
+/*
+ARTICLE: https://voskan.host/2023/08/04/building-search-engine-in-golang/
+
+GOOGLE DOCS: https://docs.google.com/document/d/1NYMRlQsVz6GqAlzDo_XdZpLEEurOWo2EO6fsLrk_q5Y/edit?usp=sharing
+
+TASK: 1.Fixing main.go code 2.Create Docs 3.More Testing 4.Implement Advanced Feature(DOCS)
+*/
 
 type Config struct {
 	MaxDepth         int    `yaml:"maxDepth"`
@@ -56,15 +58,17 @@ func main() {
 		FullTimestamp: true,
 	})
 
-	// Set up a context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Set up a signal channel to handle OS interrupts
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-
 	// Set up BoltDB
+	// db, cleanup, err := indexer.NewBoltDB(config.BoltDBPath)
+	// if err != nil {
+	// 	log.Fatal("Failed to set up BoltDB:", err)
+	// }
+	// defer func() {
+	// 	if err := cleanup(); err != nil {
+	// 		log.Fatal("Failed to close BoltDB:", err)
+	// 	}
+	// }()
+
 	db, cleanup := indexer.NewInMemoryBoltDB()
 	defer func() {
 		if err := cleanup(); err != nil {
@@ -74,36 +78,23 @@ func main() {
 
 	// Set up Redis
 	redisClient := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: config.RedisAddress,
 	})
 	defer redisClient.Close()
 
 	// Initialize the indexer
-	idx := indexer.NewIndexer(db, redisClient)
+	idx := indexer.NewIndexer(db.DB, redisClient)
 
 	// Set up the crawler
-	c := crawler.NewCrawler(config.MaxDepth, config.Concurrency) // Set maxDepth and concurrency as desired
-	c.SetFilterDomain(config.FilterDomain)                       // Set the domain to filter URLs during crawling
+	c := crawler.NewCrawler(config.MaxDepth, config.Concurrency)
+	c.SetFilterDomain(config.FilterDomain)
 
-	// Start crawling from the provided URL with depth 0 in a separate goroutine
-	go func() {
-		log.Info("Starting crawling...")
-		c.Crawl(config.ExampleQueryLink, 0)
-		log.Info("Crawling finished.")
-	}()
+	// Start crawling from the provided URL with depth 0
+	log.Info("Starting crawling...")
+	c.Crawl(config.ExampleQueryLink, 0)
+	log.Info("Crawling finished.")
 
-	// Wait for the OS interrupt signal or a context cancellation
-	select {
-	case <-signalCh:
-		log.Info("Received OS interrupt signal. Gracefully shutting down...")
-	case <-ctx.Done():
-		log.Info("Context canceled. Gracefully shutting down...")
-	}
-
-	// Cancel the context to signal the other goroutines to stop
-	cancel()
-
-	// Wait for the crawling to finish and clean up resources
+	// Wait for crawling to finish
 	c.Wait()
 
 	// After crawling, index the collected data
@@ -118,7 +109,7 @@ func main() {
 
 	// Query the search engine
 	log.Info("Searching...")
-	query := "Golang"
+	query := "Phones category"
 	options := &search.SearchOptions{
 		FilterDomain: config.FilterDomain,
 		SortBy:       "relevance", // or "date"
@@ -131,6 +122,7 @@ func main() {
 
 	// Print the search results
 	log.Info("Search Results:")
+	fmt.Println("results", results)
 	for i, url := range results {
 		fmt.Printf("%d. %s\n", i+1, url)
 	}

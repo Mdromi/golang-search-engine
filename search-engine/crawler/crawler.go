@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -131,12 +132,20 @@ func (c *Crawler) fetch(url string) (*http.Response, error) {
 	}
 
 	// Set headers, e.g., User-Agent
-	req.Header.Set("User-Agent", "our-crawler-name")
+	// req.Header.Set("User-Agent", "our-crawler-name")
+	req.Header.Set("User-Agent", "Golang-Crawler/1.0 (+https://github.com/Mdromi/golang-search-engine/search-engine/)")
 
-	// Use the client to send the request
+	// Use the client to send the request with an increased timeout duration (e.g., 10 seconds)
+	c.client.Timeout = 10 * time.Second
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check the HTTP response status code
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("failed to fetch URL %s: status code %d", url, resp.StatusCode)
 	}
 
 	return resp, nil

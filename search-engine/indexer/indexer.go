@@ -1,3 +1,5 @@
+// indexer.go
+
 package indexer
 
 import (
@@ -5,16 +7,17 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/boltdb/bolt"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/net/context"
 )
 
 type Indexer struct {
-	db    *InMemoryBoltDB
+	db    Database
 	redis *redis.Client
 }
 
@@ -22,10 +25,11 @@ type Indexer struct {
 type IndexDB interface {
 	Update(func(*bolt.Tx) error) error
 	View(func(*bolt.Tx) error) error
+	Close() error
 }
 
 // NewIndexer creates a new instance of the Indexer.
-func NewIndexer(db *InMemoryBoltDB, redis *redis.Client) *Indexer {
+func NewIndexer(db Database, redis *redis.Client) *Indexer {
 	return &Indexer{
 		db:    db,
 		redis: redis,
@@ -50,10 +54,17 @@ func (i *Indexer) Index(data map[string][]string) error {
 				defer wg.Done()
 
 				// Use the word as the key and the URLs as the value
-				if err := bucket.Put([]byte(word), gzipCompress(urls)); err != nil {
+				if err := bucket.Put([]byte(word), []byte(strings.Join(urls, ","))); err != nil {
 					fmt.Println("Failed to index word:", word)
 				}
-			}(word, urls)
+			}(word, append([]string{}, urls...)) // Pass the copy of "urls" to the goroutine
+
+			// Save data to Redis after indexing in BoltDB
+			if i.redis != nil {
+				if err := i.saveToRedis(word, urls); err != nil {
+					fmt.Println("Failed to save data to Redis:", err)
+				}
+			}
 		}
 
 		wg.Wait()
@@ -64,20 +75,24 @@ func (i *Indexer) Index(data map[string][]string) error {
 // Query searches for a given word and returns the associated URLs.
 func (i *Indexer) Query(word string) ([]string, error) {
 	// Try to get the data from Redis first
-	urls, err := i.getFromRedis(word)
-	if err == nil {
-		return urls, nil
+	if i.redis != nil {
+		urls, err := i.getFromRedis(word)
+		if err == nil {
+			return urls, nil
+		}
 	}
 
-	// If not found in Redis, try to get it from BoltDB
-	urls, err = i.getFromBoltDB(word)
+	// If not found in Redis or Redis is not available, try to get it from BoltDB
+	urls, err := i.getFromBoltDB(word)
 	if err != nil {
 		return nil, err
 	}
 
 	// Save the data to Redis for future queries
-	if err := i.saveToRedis(word, urls); err != nil {
-		fmt.Println("Failed to save data to Redis:", err)
+	if i.redis != nil {
+		if err := i.saveToRedis(word, urls); err != nil {
+			fmt.Println("Failed to save data to Redis:", err)
+		}
 	}
 
 	return urls, nil
@@ -112,9 +127,7 @@ func (i *Indexer) getFromBoltDB(word string) ([]string, error) {
 // getFromRedis retrieves the data from Redis.
 func (i *Indexer) getFromRedis(word string) ([]string, error) {
 	// Get the data from Redis
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
+	ctx := context.Background()
 	data, err := i.redis.Get(ctx, word).Result()
 	if err != nil {
 		return nil, err
@@ -132,6 +145,11 @@ func (i *Indexer) getFromRedis(word string) ([]string, error) {
 
 // saveToRedis saves the data to Redis.
 func (i *Indexer) saveToRedis(word string, urls []string) error {
+	// If the Redis client is nil, just return without saving
+	if i.redis == nil {
+		return nil
+	}
+
 	// Encode the data
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(urls)
@@ -140,10 +158,8 @@ func (i *Indexer) saveToRedis(word string, urls []string) error {
 	}
 
 	// Set the data in Redis with an expiration of 1 hour
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	_, err = i.redis.SetEX(ctx, word, buf.String(), 1*time.Hour).Result()
+	ctx := context.Background()
+	_, err = i.redis.Set(ctx, word, buf.String(), 1*time.Hour).Result()
 	return err
 }
 
